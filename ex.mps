@@ -6,7 +6,7 @@
 *     Binary         : 0
 *     Integer        : 0
 *     Continuous     : 2
-NAME  OBJSENSE_MAX
+NAME          OBJSENSE MAX
 ROWS
  N  COST
  L  auto_c_000000000
