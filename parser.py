@@ -1,6 +1,6 @@
 from pysmps import smps_loader as smps
 import sys
-import pprint
+import traceback
 
 class constraint:
     def __init__(self, mult, sign, const):
@@ -8,9 +8,15 @@ class constraint:
         self.sign = sign
         self.const = const
 
+    def show_obj(self):
+        num_vars = len(self.mult)
+        terms = [ None  if m == 0.000 else "X{}".format(v) if m == 1.0 else "{:.3f}*X{}".format(m, v) for (m,v) in zip(self.mult, range(num_vars)) ]
+        terms = filter(lambda x: x != None, terms)
+        return " + ".join(terms)
+
     def show(self):
         num_vars = len(self.mult)
-        terms = [ None  if m == 0.0 else "X{}".format(v) if m == 1.0 else "{:.3f}*X{}".format(m, v) for (m,v) in zip(self.mult, range(num_vars)) ]
+        terms = [ None  if m == 0.000 else "X{}".format(v) if m == 1.0 else "{:.3f}*X{}".format(m, v) for (m,v) in zip(self.mult, range(num_vars)) ]
         terms = filter(lambda x: x != None, terms)
         if self.sign == 0:
             return " + ".join(terms) + " == " + "{:.3f}".format(self.const)
@@ -34,10 +40,10 @@ def substitutions(constraints, objective, num_vars, num_constr, max_min):
     """
 
     substitutions = {
-        'vars' : ", ".join(["X{}".format(i) for i in range(num_vars)]),
+        'vars' : ", ".join(["X{} = __GADGET_exist()".format(i) for i in range(num_vars)]),
         'maxmin' : "minimize" if max_min == 0 else "maximize",
-        'objective': objective.show().split(">=")[0],
-        'constraints': ",\n\t".join([c.show() for c in constraints])
+        'objective': objective.show_obj(),
+        'constraints': ",\n\t".join([c.show() for c in constraints if max(c.mult) != 0 and min(c.mult) != 0])
     }
 
     for (term, subst) in sorted(substitutions.items(), key=lambda k: -len(k[0])):
@@ -49,8 +55,6 @@ def parse(filename):
 
     # Is it max or min objective?
     min_max = 1
-    if("MIN" in ex[0]):
-        min_max = 0
 
     equaz = ex[2]
     varz = ex[3]
