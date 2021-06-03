@@ -101,7 +101,7 @@ class RangeConstraint(Show):
         if(self.bounded):
             return "{}{} {} {:.3f}".format(var,self.index, self.sign.show(), self.bound)
         else:
-            return None
+            return ""
 
 class ObjectiveConstraint(Show):
     def __init__(self, mult):
@@ -114,8 +114,20 @@ class ObjectiveConstraint(Show):
         return " + ".join(terms)
 
 
+def ccheckgen(constraints, range_constraints):
+    return """
+    __GADGET_check(
+      {}
+    );
+    """.format(
+        ",\n\t".join(
+            [c.show() for c in constraints if max(c.mult) != 0 and min(c.mult) != 0] +
+            [c.show() for c in range_constraints if c.show() != ""]
+        )
+    )
+
 # substitution dict
-def cfuncgen(constraints, objective, num_vars, num_constr, max_min, range_constraints):
+def cfuncgen(constraints, objective, num_vars, max_min, range_constraints):
     C = """
     fp32 $vars;
 
@@ -131,7 +143,7 @@ def cfuncgen(constraints, objective, num_vars, num_constr, max_min, range_constr
         'maxmin' : "minimize" if max_min == 0 else "maximize",
         'objective': objective.show(),
         'constraints': ",\n\t".join([c.show() for c in constraints if max(c.mult) != 0 and min(c.mult) != 0]),
-        'rangeconstraints': ",\n\t".join([c.show() for c in range_constraints if c.show() != None])
+        'rangeconstraints': ",\n\t".join([c.show() for c in range_constraints if c.show() != ""])
     }
 
     for (term, subst) in sorted(substitutions.items(), key=lambda k: -len(k[0])):
@@ -151,7 +163,6 @@ def parse(filename):
     # Is it max or min objective?
     min_max = 1
     num_vars = len(ex[3])
-    num_constr = len(ex[2])
     pobj = ObjectiveConstraint(ex[6])
     r1, r2 = itertools.tee(rhs())
     dobj = ObjectiveConstraint(list(r1))
@@ -179,44 +190,67 @@ def parse(filename):
 
     drangeconstraints = [ RangeConstraint(i, c.sign.flip().bound(), 0.0) for (i, c) in enumerate(pconstraints) ]
     return (
-        pconstraints, pobj, num_vars, num_constr, min_max, prangeconstraints,
-        dconstraints, dobj, num_constr, num_vars, 1 - min_max, drangeconstraints
+        pconstraints, pobj, num_vars, min_max, prangeconstraints,
+        dconstraints, dobj, len(pconstraints), 1 - min_max, drangeconstraints
     )
 
-def prettyprint(substitutions):
-    with open("simplex_template.c") as templf:
-        templ = templf.read()
-
 # MAIN
-(pconstraints, pobj, pnum_vars, pnum_constr, pmin_max, prangeconstraints,
-dconstraints, dobj, dnum_constr, dnum_vars, dmin_max, drangeconstraints) = parse(sys.argv[1])
+(pconstraints, pobj, pnum_vars, pmin_max, prangeconstraints,
+dconstraints, dobj, dnum_vars, dmin_max, drangeconstraints) = parse(sys.argv[1])
 
 c_header = '''
+typedef double fp32;
+
+int dequal(fp32 a, fp32 b, fp32 delta) {
+    if (a > b) {
+        return (a - b) <= delta;
+    } else {
+        return (b - a) <= delta;
+    }
+}
+
 int main() {
-    typedef double fp32;
 '''
 
 primal = cfuncgen(
     pconstraints,
     pobj,
     pnum_vars,
-    pnum_constr,
     pmin_max,
     prangeconstraints
 )
+
+primal_check = ccheckgen(
+    pconstraints,
+    prangeconstraints
+)
+
+primal_obj = pobj.show()
+
 var = 'Y'
 dual = cfuncgen(
     dconstraints,
     dobj,
     dnum_vars,
-    dnum_constr,
     dmin_max,
     drangeconstraints
 )
+
+dual_check = ccheckgen(
+    dconstraints,
+    drangeconstraints
+)
+
+dual_obj = dobj.show()
+
+certificate = "    __GADGET_check(dequal({}, {}, 0.01));".format(
+    primal_obj,
+    dual_obj
+);
 
 c_foot = '''
 }
 '''
 
-print("\n".join([c_header, primal, dual, c_foot]))
+print("\n".join([c_header, primal, dual, primal_check, dual_check, certificate, c_foot]))
 
