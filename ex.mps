@@ -20,7 +20,4 @@ COLUMNS
 RHS
     RHS               auto_c_000000000      14  auto_c_000000001       0
     RHS               auto_c_000000002       2
-BOUNDS
- PL BOUND             x
- PL BOUND             y
 ENDATA

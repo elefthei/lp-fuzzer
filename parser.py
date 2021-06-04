@@ -183,17 +183,17 @@ def parse(filename):
         pconstraints += [Constraint(mult, Sign(s), r)]
 
     prangeconstraints = []
+    i = 0
     if ex[10] != []:
         BOUND = ex[10][0]
         for b in ex[11][BOUND]:
-            i = 0
             for v in ex[11][BOUND][b]:
                 c = RangeConstraint(i, b, v)
                 prangeconstraints += [c]
                 i+=1
-            while(i < num_vars):
-                prangeconstraints += [RangeConstraint(i, 'UNCONSTRAINED', 0.0)]
-                i+=1
+    while(i < num_vars):
+        prangeconstraints += [RangeConstraint(i, 'PL', 0.0)]
+        i+=1
 
     for (mult, s, r) in zip(ex[7].transpose(), [c.sign_flip() for c in prangeconstraints], ex[6].transpose()):
         dconstraints += [ Constraint(mult, s, r) ]
