@@ -4,6 +4,8 @@ import traceback
 import itertools
 
 var = 'X'
+delta = 0.01
+
 class Show:
     def show():
         raise ValueError("Not implemented")
@@ -26,25 +28,35 @@ class Sign(Show):
         self.sign = sign
 
     def flip(self):
-        newsign = self
-        newsign.sign = newsign.sign * -1
-        return newsign
+        s = self.sign
+        if(s == 1):
+            return Sign('L')
+        elif(s == 0):
+            return Sign('E')
+        elif(s == -1):
+            return Sign('G')
+        else:
+            raise ValueError("Flip sign")
 
     def bound(self):
         if self.sign == 0:
             return "FX"
         elif self.sign == 1:
             return "LO"
-        else:
+        elif self.sign == -1:
             return 'UP'
+        else:
+            raise ValueError("Wrong sign")
 
     def show(self):
         if self.sign == 0:
             return "=="
         elif self.sign == 1:
+            return ">="
+        elif self.sign == -1:
             return "<="
         else:
-            return ">="
+            raise ValueError("Wrong sign in show")
 
 class Constraint(Show):
     def __init__(self, mult, sign, const):
@@ -58,48 +70,52 @@ class Constraint(Show):
         terms = filter(lambda x: x != None, terms)
         return " + ".join(terms) + " " + self.sign.show() + " {:.3f}".format(self.const)
 
+    def show_delta(self):
+        num_vars = len(self.mult)
+        terms = [ None  if m == 0.000 else "{}{}".format(var,v) if m == 1.0 else "{:.3f}*{}{}".format(m, var,v) for (m,v) in zip(self.mult, range(num_vars)) ]
+        terms = filter(lambda x: x != None, terms)
+        if self.sign.sign == 0:
+            return "dequal(" + ", ".join([" + ".join(terms), "{:.3f}".format(self.const), str(delta)]) + ")"
+        elif self.sign.sign == 1:
+            return "dge(" + ", ".join([" + ".join(terms), "{:.3f}".format(self.const), str(delta)]) + ")"
+        elif self.sign.sign == -1:
+            return "dle(" + ", ".join([" + ".join(terms), "{:.3f}".format(self.const), str(delta)]) + ")"
+        else:
+            raise ValueError("Wrong sign in show_delta " + self.show())
 
+# Three types of range constraints x >= 0, x <= 0, x \in R (unbounded)
 class RangeConstraint(Show):
     def __init__(self, num_var, b, v):
         if v == float('inf') or v == float('-inf'):
             self.bounded = False
-        elif b == 'UP':
+        elif b == 'UP' and v <= 0.0:
             self.index = num_var
             self.sign = Sign('L')
-            self.bound = v
             self.bounded = True
-        elif b == 'LO':
+        elif b == 'LO' and v >= 0.0:
             self.index = num_var
             self.sign = Sign('G')
-            self.bound = v
-            self.bounded = True
-        elif b == 'FX':
-            self.index = num_var
-            self.sign = Sign('E')
-            self.bound = v
             self.bounded = True
         elif b == 'MI':
             self.index = num_var
             self.sign = Sign('L')
-            self.bound = 0.0
             self.bounded = True
         elif b == 'PL':
             self.index = num_var
             self.sign = Sign('G')
-            self.bound = 0.0
             self.bounded = True
         else:
             self.bounded = False
 
     def sign_flip(self):
         if self.bounded:
-            return self.sign.flip()
+            return self.sign
         else:
             return Sign('E')
 
     def show(self):
         if(self.bounded):
-            return "{}{} {} {:.3f}".format(var,self.index, self.sign.show(), self.bound)
+            return "{}{} {} {:.3f}".format(var,self.index, self.sign.show(), 0.0)
         else:
             return ""
 
@@ -115,16 +131,10 @@ class ObjectiveConstraint(Show):
 
 
 def ccheckgen(constraints, range_constraints):
-    return """
-    __GADGET_check(
-      {}
-    );
-    """.format(
-        ",\n\t".join(
-            [c.show() for c in constraints if max(c.mult) != 0 and min(c.mult) != 0] +
+    return ",\n\t".join(
+            [c.show_delta() for c in constraints if max(c.mult) != 0 and min(c.mult) != 0] +
             [c.show() for c in range_constraints if c.show() != ""]
         )
-    )
 
 # substitution dict
 def cfuncgen(constraints, objective, num_vars, max_min, range_constraints):
@@ -209,9 +219,18 @@ int dequal(fp32 a, fp32 b, fp32 delta) {
     }
 }
 
+int dle(fp32 a, fp32 b, fp32 delta) {
+    return (a - delta) <= b;
+}
+
+int dge(fp32 a, fp32 b, fp32 delta) {
+    return (a + delta) >= b;
+}
+
 int main() {
 '''
 
+var = 'X'
 primal = cfuncgen(
     pconstraints,
     pobj,
@@ -219,12 +238,6 @@ primal = cfuncgen(
     pmin_max,
     prangeconstraints
 )
-
-primal_check = ccheckgen(
-    pconstraints,
-    prangeconstraints
-)
-
 primal_obj = pobj.show()
 
 var = 'Y'
@@ -235,22 +248,33 @@ dual = cfuncgen(
     dmin_max,
     drangeconstraints
 )
+dual_obj = dobj.show()
 
+check_header = "    int check = __GADGET_check("
+
+var = 'X'
+primal_check = ccheckgen(
+    pconstraints,
+    prangeconstraints
+)
+
+var = 'Y'
 dual_check = ccheckgen(
     dconstraints,
     drangeconstraints
 )
 
-dual_obj = dobj.show()
-
-certificate = "    __GADGET_check(dequal({}, {}, 0.01));".format(
+certificate = "dequal({}, {}, {})".format(
     primal_obj,
-    dual_obj
+    dual_obj,
+    delta
 );
 
-c_foot = '''
+c_foot = '''    );
+
+    return check;
 }
 '''
 
-print("\n".join([c_header, primal, dual, primal_check, dual_check, certificate, c_foot]))
+print("\n".join([c_header, primal, dual, check_header, "\t" + primal_check +",\n\t" + dual_check + ",\n\t" + certificate, c_foot]))
 
