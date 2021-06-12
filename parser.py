@@ -75,7 +75,7 @@ class Constraint(Show):
         terms = [ None  if m == 0.000 else "{}{}".format(var,v) if m == 1.0 else "{:.3f}*{}{}".format(m, var,v) for (m,v) in zip(self.mult, range(num_vars)) ]
         terms = filter(lambda x: x != None, terms)
         if self.sign.sign == 0:
-            return "dequal(" + ", ".join([" + ".join(terms), "{:.3f}".format(self.const), str(delta)]) + ")"
+            return "deq(" + ", ".join([" + ".join(terms), "{:.3f}".format(self.const), str(delta)]) + ")"
         elif self.sign.sign == 1:
             return "dge(" + ", ".join([" + ".join(terms), "{:.3f}".format(self.const), str(delta)]) + ")"
         elif self.sign.sign == -1:
@@ -211,20 +211,16 @@ dconstraints, dobj, dnum_vars, dmin_max, drangeconstraints) = parse(sys.argv[1])
 c_header = '''
 typedef double fp32;
 
-int dequal(fp32 a, fp32 b, fp32 delta) {
-    if (a > b) {
-        return (a - b) <= delta;
-    } else {
-        return (b - a) <= delta;
-    }
-}
-
-int dle(fp32 a, fp32 b, fp32 delta) {
-    return (a - delta) <= b;
+int deq(fp32 a, fp32 b, fp32 delta) {
+    return ((-1 * delta) <= (a - b)) && ((a - b) <= delta);
 }
 
 int dge(fp32 a, fp32 b, fp32 delta) {
     return (a + delta) >= b;
+}
+
+int dle(fp32 a, fp32 b, fp32 delta) {
+    return a <= (b + delta);
 }
 
 int main() {
@@ -264,7 +260,7 @@ dual_check = ccheckgen(
     drangeconstraints
 )
 
-certificate = "dequal({}, {}, {})".format(
+certificate = "deq({}, {}, {})".format(
     primal_obj,
     dual_obj,
     delta
