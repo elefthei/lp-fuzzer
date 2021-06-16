@@ -70,6 +70,12 @@ class Constraint(Show):
         terms = filter(lambda x: x != None, terms)
         return " + ".join(terms) + " " + self.sign.show() + " {:.3f}".format(self.const)
 
+    def is_zero(self):
+        for v in self.mult:
+            if v != 0.0:
+                return False
+        return True
+
     def show_delta(self):
         num_vars = len(self.mult)
         terms = [ None  if m == 0.000 else "{}{}".format(var,v) if m == 1.0 else "{:.3f}*{}{}".format(m, var,v) for (m,v) in zip(self.mult, range(num_vars)) ]
@@ -86,22 +92,19 @@ class Constraint(Show):
 # Three types of range constraints x >= 0, x <= 0, x \in R (unbounded)
 class RangeConstraint(Show):
     def __init__(self, num_var, b, v):
+        self.index = num_var
         if v == float('inf') or v == float('-inf'):
             self.bounded = False
         elif b == 'UP' and v <= 0.0:
-            self.index = num_var
             self.sign = Sign('L')
             self.bounded = True
         elif b == 'LO' and v >= 0.0:
-            self.index = num_var
             self.sign = Sign('G')
             self.bounded = True
         elif b == 'MI':
-            self.index = num_var
             self.sign = Sign('L')
             self.bounded = True
         elif b == 'PL':
-            self.index = num_var
             self.sign = Sign('G')
             self.bounded = True
         else:
@@ -132,7 +135,7 @@ class ObjectiveConstraint(Show):
 
 def ccheckgen(constraints, range_constraints):
     return ",\n\t".join(
-            [c.show_delta() for c in constraints if max(c.mult) != 0 and min(c.mult) != 0] +
+            [c.show_delta() for c in constraints if not c.is_zero()] +
             [c.show() for c in range_constraints if c.show() != ""]
         )
 
@@ -143,17 +146,18 @@ def cfuncgen(constraints, objective, num_vars, max_min, range_constraints):
 
     __GADGET_$maxmin(
       $objective, // objective
-      $constraints, //constraints
-      $rangeconstraints
+
+      $constraints
     );
     """
+    constraints = [c.show() for c in constraints if not c.is_zero()]
+    rangeconstraints = [c.show() for c in range_constraints if c.show() != ""]
 
     substitutions = {
         'vars' : ", ".join(["{}{} = __GADGET_exist()".format(var,i) for i in range(num_vars)]),
         'maxmin' : "minimize" if max_min == 0 else "maximize",
         'objective': objective.show(),
-        'constraints': ",\n\t".join([c.show() for c in constraints if max(c.mult) != 0 and min(c.mult) != 0]),
-        'rangeconstraints': ",\n\t".join([c.show() for c in range_constraints if c.show() != ""])
+        'constraints': ",\n\t".join(constraints + rangeconstraints)
     }
 
     for (term, subst) in sorted(substitutions.items(), key=lambda k: -len(k[0])):
@@ -178,22 +182,23 @@ def parse(filename):
     dobj = ObjectiveConstraint(list(r1))
     pconstraints = []
     dconstraints = []
-
-    for (mult, s, r) in zip(ex[7], ex[5], r2):
+    rl2 = list(r2)
+    assert(len(ex[7]) == len(ex[5]))
+    assert(len(ex[7]) == len(rl2))
+    assert(len(ex[5]) == len(rl2))
+    for (mult, s, r) in zip(ex[7], ex[5], rl2):
         pconstraints += [Constraint(mult, Sign(s), r)]
 
-    prangeconstraints = []
-    i = 0
+    # Keeps the ranges of each variable
+    bounds = dict([(i, RangeConstraint(i, 'UNCONSTRAINED', 0.0)) for i in range(num_vars)])
     if ex[10] != []:
-        BOUND = ex[10][0]
-        for b in ex[11][BOUND]:
-            for v in ex[11][BOUND][b]:
-                c = RangeConstraint(i, b, v)
-                prangeconstraints += [c]
-                i+=1
-    while(i < num_vars):
-        prangeconstraints += [RangeConstraint(i, 'PL', 0.0)]
-        i+=1
+        bound = ex[10][0]
+        for b in ex[11][bound].keys():
+            for i, v in enumerate(ex[11][bound][b]):
+                if not bounds[i].bounded:
+                    bounds[i] = RangeConstraint(i, b, v)
+
+    prangeconstraints = [v if v.bounded else RangeConstraint(v.index, 'LO', 0.0) for v in bounds.values()]
 
     for (mult, s, r) in zip(ex[7].transpose(), [c.sign_flip() for c in prangeconstraints], ex[6].transpose()):
         dconstraints += [ Constraint(mult, s, r) ]
