@@ -122,27 +122,38 @@ class RangeConstraint(Show):
         else:
             return ""
 
+    def show_delta(self):
+        if self.sign.sign == 0:
+            return "deq(" + "{}{}".format(var, self.index) + ", 0.0, {})".format(delta)
+        elif self.sign.sign == 1:
+            return "dge(" + "{}{}".format(var, self.index) + ", 0.0, {})".format(delta)
+        elif self.sign.sign == -1:
+            return "dle(" + "{}{}".format(var, self.index) + ", 0.0, {})".format(delta)
+        else:
+            raise ValueError("Wrong sign in show_delta " + self.show())
+
 class ObjectiveConstraint(Show):
     def __init__(self, mult):
         self.mult = mult
 
     def show(self):
-        num_vars = len(self.mult)
-        terms = [ None  if m == 0.000 else "{}{}".format(var,v) if m == 1.0 else "{:.3f}*{}{}".format(m, var, v) for (m,v) in zip(self.mult, range(num_vars)) ]
-        terms = filter(lambda x: x != None, terms)
+        terms = [ None  if m == 0.000 else "{}{}".format(var, i) if m == 1.0 else "{:.3f}*{}{}".format(m, var, i) for (i, m) in enumerate(self.mult) ]
+        terms = list(filter(lambda x: x != None, terms))
+        if(len(terms) == 0):
+            return "0*{}0".format(var)
         return " + ".join(terms)
 
 
 def ccheckgen(constraints, range_constraints):
     return ",\n\t".join(
             [c.show_delta() for c in constraints if not c.is_zero()] +
-            [c.show() for c in range_constraints if c.show() != ""]
+            [c.show_delta() for c in range_constraints if c.show() != ""]
         )
 
 # substitution dict
 def cfuncgen(constraints, objective, num_vars, max_min, range_constraints):
     C = """
-    fp32 $vars;
+    fp64 $vars;
 
     __GADGET_$maxmin(
       $objective, // objective
@@ -155,7 +166,7 @@ def cfuncgen(constraints, objective, num_vars, max_min, range_constraints):
 
     substitutions = {
         'vars' : ", ".join(["{}{} = __GADGET_exist()".format(var,i) for i in range(num_vars)]),
-        'maxmin' : "minimize" if max_min == 0 else "maximize",
+        'maxmin' : "minimize" if max_min != 0 else "maximize",
         'objective': objective.show(),
         'constraints': ",\n\t".join(constraints + rangeconstraints)
     }
@@ -168,26 +179,25 @@ def parse(filename):
     ex = smps.load_mps(filename)
     def rhs():
         if ex[8] == []:
-            for d in ex[7]:
+            while True:
                 yield 0.0
         else:
             for c in ex[9][ex[8][0]]:
                 yield c
+            while True:
+                yield 0.0
 
     # Is it max or min objective?
     min_max = 1
     num_vars = len(ex[3])
     pobj = ObjectiveConstraint(ex[6])
-    r1, r2 = itertools.tee(rhs())
-    dobj = ObjectiveConstraint(list(r1))
+    r = list(itertools.islice(rhs(), len(ex[5])))
+    dobj = ObjectiveConstraint(r)
     pconstraints = []
     dconstraints = []
-    rl2 = list(r2)
     assert(len(ex[7]) == len(ex[5]))
-    assert(len(ex[7]) == len(rl2))
-    assert(len(ex[5]) == len(rl2))
-    for (mult, s, r) in zip(ex[7], ex[5], rl2):
-        pconstraints += [Constraint(mult, Sign(s), r)]
+    for (mult, s, ri) in zip(ex[7], ex[5], r):
+        pconstraints += [Constraint(mult, Sign(s), ri)]
 
     # Keeps the ranges of each variable
     bounds = dict([(i, RangeConstraint(i, 'UNCONSTRAINED', 0.0)) for i in range(num_vars)])
@@ -214,17 +224,17 @@ def parse(filename):
 dconstraints, dobj, dnum_vars, dmin_max, drangeconstraints) = parse(sys.argv[1])
 
 c_header = '''
-typedef double fp32;
+typedef double fp64;
 
-int deq(fp32 a, fp32 b, fp32 delta) {
+int deq(fp64 a, fp64 b, fp64 delta) {
     return ((-1 * delta) <= (a - b)) && ((a - b) <= delta);
 }
 
-int dge(fp32 a, fp32 b, fp32 delta) {
+int dge(fp64 a, fp64 b, fp64 delta) {
     return (a + delta) >= b;
 }
 
-int dle(fp32 a, fp32 b, fp32 delta) {
+int dle(fp64 a, fp64 b, fp64 delta) {
     return a <= (b + delta);
 }
 
