@@ -1,0 +1,274 @@
+from pysmps import smps_loader as smps
+import sys
+import traceback
+import itertools
+
+class Sign():
+    def __init__(self, s):
+        sign = 0
+        if(s == 'G'):
+            sign = 1
+        elif(s == 'E'):
+            sign = 0
+        elif(s == 'L'):
+            sign = -1
+        else:
+            raise ValueError("Interpret sign")
+        self.sign = sign
+
+    def flip(self):
+        s = self.sign
+        if(s == 1):
+            return Sign('L')
+        elif(s == 0):
+            return Sign('E')
+        elif(s == -1):
+            return Sign('G')
+        else:
+            raise ValueError("Flip sign")
+
+    def bound(self):
+        if self.sign == 0:
+            return "FX"
+        elif self.sign == 1:
+            return "LO"
+        elif self.sign == -1:
+            return 'UP'
+        else:
+            raise ValueError("Wrong sign")
+
+    def show(self):
+        if self.sign == 0:
+            return "=="
+        elif self.sign == 1:
+            return ">="
+        elif self.sign == -1:
+            return "<="
+        else:
+            raise ValueError("Wrong sign in show")
+
+class Constraint:
+    def __init__(self, mult, sign, const):
+        self.mult = mult
+        self.sign = sign
+        self.const = const
+
+    def show(self, var):
+        num_vars = len(self.mult)
+        terms = [ None  if m == 0.000 else "{}{}".format(var,v) if m == 1.0 else "{:.3f}*{}{}".format(m, var,v) for (m,v) in zip(self.mult, range(num_vars)) ]
+        terms = filter(lambda x: x != None, terms)
+        return " + ".join(terms) + " " + self.sign.show() + " {:.3f}".format(self.const)
+
+    def is_zero(self):
+        for v in self.mult:
+            if v != 0.0:
+                return False
+        return True
+
+    def show_delta(self, var, delta):
+        num_vars = len(self.mult)
+        terms = [ None  if m == 0.000 else "{}{}".format(var,v) if m == 1.0 else "{:.3f}*{}{}".format(m, var,v) for (m,v) in zip(self.mult, range(num_vars)) ]
+        terms = filter(lambda x: x != None, terms)
+        if self.sign.sign == 0:
+            return "deq(" + ", ".join([" + ".join(terms), "{:.3f}".format(self.const), str(delta)]) + ")"
+        elif self.sign.sign == 1:
+            return "dge(" + ", ".join([" + ".join(terms), "{:.3f}".format(self.const), str(delta)]) + ")"
+        elif self.sign.sign == -1:
+            return "dle(" + ", ".join([" + ".join(terms), "{:.3f}".format(self.const), str(delta)]) + ")"
+        else:
+            raise ValueError("Wrong sign in show_delta " + self.show(var))
+
+# Three types of range constraints x >= 0, x <= 0, x \in R (unbounded)
+class RangeConstraint:
+    def __init__(self, num_var, b, v):
+        self.index = num_var
+        if v == float('inf') or v == float('-inf'):
+            self.bounded = False
+        elif b == 'UP':
+            self.sign = Sign('L')
+            self.bounded = True
+            self.const = v
+        elif b == 'LO':
+            self.sign = Sign('G')
+            self.bounded = True
+            self.const = v
+        elif b == 'MI':
+            self.sign = Sign('L')
+            self.bounded = True
+            self.const = 0.0
+        elif b == 'PL':
+            self.sign = Sign('G')
+            self.bounded = True
+            self.const = 0.0
+        elif b == 'FX':
+            self.sign = Sign('E')
+            self.bounded = True
+            self.const = v
+        else:
+            self.bounded = False
+
+    def show(self, var):
+        if(self.bounded):
+            return "{}{} {} {:.3f}".format(var,self.index, self.sign.show(), 0.0)
+        else:
+            return ""
+
+    def show_delta(self, var, delta):
+        if self.sign.sign == 0:
+            return "deq(" + "{}{}".format(var, self.index) + ", 0.0, {})".format(delta)
+        elif self.sign.sign == 1:
+            return "dge(" + "{}{}".format(var, self.index) + ", 0.0, {})".format(delta)
+        elif self.sign.sign == -1:
+            return "dle(" + "{}{}".format(var, self.index) + ", 0.0, {})".format(delta)
+        else:
+            raise ValueError("Wrong sign in show_delta " + self.show(var, delta))
+
+class ObjectiveConstraint:
+    def __init__(self, mult):
+        self.mult = mult
+
+    def show(self, var):
+        terms = [ None  if m == 0.000 else "{}{}".format(var, i) if m == 1.0 else "{:.3f}*{}{}".format(m, var, i) for (i, m) in enumerate(self.mult) ]
+        terms = list(filter(lambda x: x != None, terms))
+        if(len(terms) == 0):
+            return "0*{}0".format(var)
+        return " + ".join(terms)
+
+
+def ccheckgen(constraints, range_constraints, var, delta):
+    return ",\n\t".join(
+            [c.show_delta(var, delta) for c in constraints if not c.is_zero()] +
+            [c.show_delta(var, delta) for c in range_constraints if c.show(var) != ""]
+        )
+
+# substitution dict
+def cfuncgen(constraints, objective, num_vars, max_min, range_constraints, var):
+    C = """
+    fp64 $vars;
+
+    __GADGET_$maxmin(
+      $objective, // objective
+
+      $constraints
+    );
+    """
+    constraints = [c.show(var) for c in constraints if not c.is_zero()]
+    rangeconstraints = [c.show(var) for c in range_constraints if c.show(var) != ""]
+
+    substitutions = {
+        'vars' : ", ".join(["{}{} = __GADGET_exist()".format(var,i) for i in range(num_vars)]),
+        'maxmin' : "minimize" if max_min != 0 else "maximize",
+        'objective': objective.show(var),
+        'constraints': ",\n\t".join(constraints + rangeconstraints)
+    }
+
+    for (term, subst) in sorted(substitutions.items(), key=lambda k: -len(k[0])):
+        C = C.replace("${}".format(term), subst)
+    return C
+
+def parse(filename):
+    ex = smps.load_mps(filename)
+    def rhs():
+        if ex[8] == []:
+            while True:
+                yield 0.0
+        else:
+            for c in ex[9][ex[8][0]]:
+                yield c
+            while True:
+                yield 0.0
+
+    # Is it max or min objective?
+    min_max = 1
+    num_vars = len(ex[3])
+    pobj = ObjectiveConstraint(ex[6])
+    r = list(itertools.islice(rhs(), len(ex[5])))
+    pconstraints = []
+    assert(len(ex[7]) == len(ex[5]))
+    for (mult, s, ri) in zip(ex[7], ex[5], r):
+        pconstraints += [Constraint(mult, Sign(s), ri)]
+
+    # Keeps the ranges of each variable
+    bounds = dict([(i, RangeConstraint(i, 'UNCONSTRAINED', 0.0)) for i in range(num_vars)])
+    if ex[10] != []:
+        bound = ex[10][0]
+        for b in ex[11][bound].keys():
+            for i, v in enumerate(ex[11][bound][b]):
+                if not bounds[i].bounded:
+                    bounds[i] = RangeConstraint(i, b, v)
+
+    prangeconstraints = bounds.values() # [v if v.bounded else RangeConstraint(v.index, 'LO', 0.0) for v in bounds.values()]
+
+    return (pconstraints, pobj, prangeconstraints, num_vars, min_max)
+
+# MAIN
+(pconstraints, pobj, prangeconstraints, pnum_vars, pmin_max) = parse(sys.argv[1])
+(dconstraints, dobj, drangeconstraints, dnum_vars, dmin_max) = parse(sys.argv[2])
+
+c_header = '''
+typedef double fp64;
+
+int deq(fp64 a, fp64 b, fp64 delta) {
+  return ((-1 * delta) <= (a - b)) && ((a - b) <= delta);
+}
+
+int dge(fp64 a, fp64 b, fp64 delta) {
+  return (a + delta) >= b;
+}
+
+int dle(fp64 a, fp64 b, fp64 delta) {
+  return a <= (b + delta);
+}
+
+int main() {
+'''
+
+primal = cfuncgen(
+    pconstraints,
+    pobj,
+    pnum_vars,
+    pmin_max,
+    prangeconstraints,
+    'X'
+)
+primal_obj = pobj.show('X')
+
+dual = cfuncgen(
+    dconstraints,
+    dobj,
+    dnum_vars,
+    dmin_max,
+    drangeconstraints,
+    'Y'
+)
+dual_obj = dobj.show('Y')
+
+check_header = "    int check = __GADGET_check("
+
+primal_check = ccheckgen(
+    pconstraints,
+    prangeconstraints,
+    'X',
+    0.01
+)
+
+dual_check = ccheckgen(
+    dconstraints,
+    drangeconstraints,
+    'Y',
+    0.01
+)
+
+certificate = "deq({}, {}, 0.01)".format(
+    primal_obj,
+    dual_obj
+)
+
+c_foot = '''    );
+
+    return check;
+}
+'''
+
+print("\n".join([c_header, primal, dual, check_header, "\t" + primal_check +",\n\t" + dual_check + ",\n\t" + certificate, c_foot]))
+
