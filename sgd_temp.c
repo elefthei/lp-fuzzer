@@ -1,13 +1,13 @@
 typedef double fp64;
 
 // Iterate over d
-int grad_check($ws, $xis, y) {
+int grad_check($ws, $xis, short int y) {
   return y*($dot_wsxis) >= 1;
 }
 
 int main() {
 
-    fp64 $existentials;
+    long int $existentials;
 
     __GADGET_sgd($d, $n,
         $dataset

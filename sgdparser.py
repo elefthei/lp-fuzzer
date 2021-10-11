@@ -24,12 +24,8 @@ def dot(a, b):
 
 if __name__ == "__main__":
 
-    Xorig, yorig = fetch_data(sys.argv[1], return_X_y=True)
-    X, y = slice(Xorig, 4, 3), yorig[:3]
-    print("======================== X =========================")
-    print(X)
-    print("======================== y =========================")
-    print(y)
+    X, y = fetch_data(sys.argv[1], return_X_y=True)
+    # X, y = slice(Xorig, 4, 3), yorig[:3]
     n, d = X.shape
     for i in range(y.size):
         if (y[i] == 0):
@@ -45,13 +41,13 @@ if __name__ == "__main__":
 
       substitutions = {
           'existentials' : ", ".join(["{} = __GADGET_exist()".format(w) for w in WS]),
-          'dataset': ", ".join([str(x) for x in np.append(X.flatten() ,y)]),
+          'dataset': ", ".join(["%d" % x for x in np.append(X.flatten() ,y)]),
           'd': str(d),
-          'ws': ", ".join(ws),
-          'xis': ", ".join(xis),
+          'ws': ", ".join([ "long int " + w for w in ws]),
+          'xis': ", ".join([ "long int " + x for x in xis]),
           'n': str(n),
           'dot_wsxis' : dot(ws, xis),
-          'grad_checks': ",\n\t".join([ "grad_check({}, {}, {})".format(", ".join(WS), ", ".join([str(x) for x in X[i, :]]), y[i]) for i in range(n) ])
+          'grad_checks': ",\n\t".join([ "grad_check({}, {}, {})".format(", ".join(WS), ", ".join(["%d" % x for x in X[i, :]]), y[i]) for i in range(n) ])
       }
 
       for (term, subst) in sorted(substitutions.items(), key=lambda k: -len(k[0])):
